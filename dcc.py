@@ -871,7 +871,7 @@ def dcc_main(
 
     # If OLLVM is enabled, add ollvm CFLAGS
     if enable_ollvm:
-        Logger.warn("You've enabled ollvm flag, make sure your NDK supports it!")
+        Logger.warning("You've enabled ollvm flag, make sure your NDK supports it!")
         random_seed = f"0x{os.urandom(16).hex()}"
         ollvm_flags = f"LOCAL_CFLAGS := -fvisibility=hidden -mllvm -fla -mllvm -split -mllvm -split_num=5 -mllvm -sub -mllvm -sub_loop=5 -mllvm -sobf -mllvm -bcf_loop=5 -mllvm -bcf_prob=100 -mllvm -aesSeed={random_seed}"
         Logger.info(f"Random Seed: {random_seed}")
