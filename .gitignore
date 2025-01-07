@@ -180,4 +180,10 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
+# Un-necessary files
+*.apk
+filter.txt
+dcc.cfg
+.tmp/
+
 # End of https://www.toptal.com/developers/gitignore/api/python

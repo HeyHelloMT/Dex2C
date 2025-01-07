@@ -852,6 +852,7 @@ def dcc_main(
     project_dir=None,
     source_archive="project-source.zip",
     dynamic_register=False,
+    enable_ollvm=False,
 ):
     if not path.exists(apkfile):
         Logger.error("Input apk file %s does not exist", apkfile)
@@ -867,6 +868,20 @@ def dcc_main(
             custom_loader,
         )
         return
+
+    # If OLLVM is enabled, add ollvm CFLAGS
+    if enable_ollvm:
+        Logger.warn("You've enabled ollvm flag, make sure your NDK supports it!")
+        random_seed = f"0x{os.urandom(16).hex()}"
+        ollvm_flags = f"LOCAL_CFLAGS := -fvisibility=hidden -mllvm -fla -mllvm -split -mllvm -split_num=5 -mllvm -sub -mllvm -sub_loop=5 -mllvm -sobf -mllvm -bcf_loop=5 -mllvm -bcf_prob=100 -mllvm -aesSeed={random_seed}"
+        Logger.info(f"Random Seed: {random_seed}")
+        with open("project/jni/Android.mk", "r+") as file:
+            lines = file.readlines()
+            for index, line in enumerate(lines):
+                if "LOCAL_LDLIBS    := -llog" in line:
+                    lines.insert(index + 1, ollvm_flags)
+                    file.seek(0)
+                    file.writelines(lines)
 
     # Modify the dex2c file to use the custom loader path for integrity check
     with open("project/jni/nc/Dex2C.cpp", "r") as file:
@@ -1138,6 +1153,12 @@ if __name__ == "__main__":
         default="project-source.zip",
         help="Converted cpp code, compressed as zip output file.",
     )
+    parser.add_argument(
+        "--ollvm",
+        action="store_true",
+        default=False,
+        help="Enable OLLVM"
+    )
 
     args = vars(parser.parse_args())
     input_apk = args["input"]
@@ -1150,6 +1171,7 @@ if __name__ == "__main__":
     do_compile = not args["no_build"]
     source_archive = args["project_archive"]
     dynamic_register = args["dynamic_register"]
+    enable_ollvm = args["ollvm"]
 
     if args["source_dir"]:
         project_dir = args["source_dir"]
@@ -1193,6 +1215,7 @@ if __name__ == "__main__":
             project_dir,
             source_archive,
             dynamic_register,
+            enable_ollvm,
         )
     except Exception as e:
         Logger.error("Compile %s failed!" % input_apk, exc_info=True)
