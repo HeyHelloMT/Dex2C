@@ -1,44 +1,59 @@
-name: DEX2C Test
+name: DEX2C Build
 on: [push, pull_request]
 
+env:
+  NDK_VERSION: r25b
+  NDK_CACHE_KEY: ndk-${{ env.NDK_VERSION }}
+
 jobs:
-  test:
+  build:
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Cache NDK
+      id: cache-ndk
+      uses: actions/cache@v3
       with:
-        python-version: '3.10'
+        path: ~/android-ndk
+        key: ${{ env.NDK_CACHE_KEY }}
 
-    - name: Install dependencies
+    - name: Set up environment
       run: |
-        pip install androguard
-        sudo apt-get install -y android-sdk dx
-
-    - name: Set up Android NDK
+        sudo apt-get update
+        sudo apt-get install -y android-sdk dx unzip
+        
+    - name: Install NDK (if not cached)
+      if: steps.cache-ndk.outputs.cache-hit != 'true'
       run: |
         mkdir -p ~/android-ndk
-        curl -L https://dl.google.com/android/repository/android-ndk-r25b-linux.zip -o ndk.zip
+        curl -L https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip -o ndk.zip
         unzip -q ndk.zip -d ~/android-ndk
-        echo "NDK_DIR=~/android-ndk/android-ndk-r25b" >> $GITHUB_ENV
-        echo "$HOME/android-ndk/android-ndk-r25b" >> $GITHUB_PATH
-
-    - name: Run conversion with error handling
+        mv ~/android-ndk/android-ndk-${{ env.NDK_VERSION }} ~/android-ndk/android-ndk
+        
+    - name: Set up paths
       run: |
-        # First run without NDK build to verify DEX processing
-        python dcc.py -i classes.dex -f filter.txt -o out/ --dynamic-register || echo "Continuing with partial output"
+        echo "NDK_DIR=$HOME/android-ndk/android-ndk" >> $GITHUB_ENV
+        echo "$HOME/android-ndk/android-ndk" >> $GITHUB_PATH
         
-        # Check what files were generated
-        find out/ -type f | xargs -I {} sh -c 'echo "Generated: {} ($(wc -c < {} | awk "{print \$1}") bytes)"'
+    - name: Run conversion
+      run: |
+        python dcc.py -i classes.dex -f filter.txt -o out/ \
+          --ndk-path $HOME/android-ndk/android-ndk \
+          --dynamic-register -v
         
-        # Even if conversion failed, proceed to artifact upload
-        exit 0
-
+    - name: Verify outputs
+      run: |
+        [ -f out/modified.dex ] || { echo "Missing modified.dex"; exit 1; }
+        [ -d out/libs ] || { echo "Missing libs directory"; exit 1; }
+        echo "=== Generated .so files ==="
+        find out/libs -name "*.so" | xargs ls -lh
+        
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: dex2c-output
-        path: out/
-        if-no-files-found: error
+        path: |
+          out/modified.dex
+          out/libs/
+          out/jni/nc/
