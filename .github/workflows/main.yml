@@ -1,13 +1,13 @@
 name: DEX2C Build
-on: [push, pull_request]
 
-env:
-  NDK_VERSION: r25b
-  NDK_CACHE_KEY: ndk-${{ env.NDK_VERSION }}
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: r25b
+    
     steps:
     - uses: actions/checkout@v4
     
@@ -16,7 +16,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ~/android-ndk
-        key: ${{ env.NDK_CACHE_KEY }}
+        key: ndk-${{ env.NDK_VERSION }}
 
     - name: Set up environment
       run: |
@@ -29,31 +29,23 @@ jobs:
         mkdir -p ~/android-ndk
         curl -L https://dl.google.com/android/repository/android-ndk-${{ env.NDK_VERSION }}-linux.zip -o ndk.zip
         unzip -q ndk.zip -d ~/android-ndk
-        mv ~/android-ndk/android-ndk-${{ env.NDK_VERSION }} ~/android-ndk/android-ndk
-        
-    - name: Set up paths
-      run: |
-        echo "NDK_DIR=$HOME/android-ndk/android-ndk" >> $GITHUB_ENV
-        echo "$HOME/android-ndk/android-ndk" >> $GITHUB_PATH
+        mv ~/android-ndk/android-ndk-${{ env.NDK_VERSION }} ~/android-ndk/ndk
         
     - name: Run conversion
       run: |
         python dcc.py -i classes.dex -f filter.txt -o out/ \
-          --ndk-path $HOME/android-ndk/android-ndk \
+          --ndk-path ~/android-ndk/ndk \
           --dynamic-register -v
         
     - name: Verify outputs
       run: |
-        [ -f out/modified.dex ] || { echo "Missing modified.dex"; exit 1; }
-        [ -d out/libs ] || { echo "Missing libs directory"; exit 1; }
-        echo "=== Generated .so files ==="
+        ls -R out/
+        [ -f out/modified.dex ] || exit 1
+        [ -d out/libs ] || exit 1
         find out/libs -name "*.so" | xargs ls -lh
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: dex2c-output
-        path: |
-          out/modified.dex
-          out/libs/
-          out/jni/nc/
+        path: out
