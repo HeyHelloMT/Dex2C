@@ -471,15 +471,24 @@ def main():
         if not args.output:  # Only clean temp dir if we created it
             clean_tmp_directory()
 
-# Helper function to get compiled methods list
 def get_compiled_methods(project_dir):
     methods = []
     with open(os.path.join(project_dir, "jni", "nc", "compiled_methods.txt")) as f:
         for line in f:
-            # Convert from "Lclass;->method(Largs)ReturnType" to triple
-            class_part, rest = line.split("->")
-            method_part, proto_part = rest.split("(")
-            methods.append((class_part, method_part, "(" + proto_part))
+            line = line.strip()
+            if not line:
+                continue
+            
+            # More robust parsing that handles all method signature cases
+            if '->' in line and '(' in line:
+                try:
+                    class_part, rest = line.split('->', 1)
+                    method_part, proto_part = rest.split('(', 1)
+                    methods.append((class_part, method_part, '(' + proto_part))
+                except ValueError:
+                    logger.warning(f"Skipping malformed method signature: {line}")
+            else:
+                logger.warning(f"Skipping invalid method format: {line}")
     return methods
 
 if __name__ == "__main__":
