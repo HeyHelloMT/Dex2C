@@ -431,64 +431,6 @@ def modify_dex_with_native_stubs(dexfile, compiled_methods, output_dex):
         print(f"Error modifying DEX: {str(e)}")
         return False
 
-def main():
-    parser = argparse.ArgumentParser(description="DEX to C++ Converter")
-    parser.add_argument("-i", "--input", required=True, help="Input DEX file path")
-    parser.add_argument("-f", "--filter", default="filter.txt", help="Method filter configuration file")
-    parser.add_argument("-o", "--output", help="Output directory for compiled code")
-    parser.add_argument("-p", "--obfuscate", action="store_true", help="Obfuscate string constants")
-    parser.add_argument("-d", "--dynamic-register", action="store_true", help="Use dynamic method registration")
-    parser.add_argument("--ndk-path", help="Custom path to Android NDK")
-    parser.add_argument("--skip-synthetic", action="store_true", help="Skip synthetic methods")
-
-    args = parser.parse_args()
-
-    global SKIP_SYNTHETIC_METHODS
-    SKIP_SYNTHETIC_METHODS = args.skip_synthetic
-
-    # Load NDK path from config if available
-    config = load_config()
-    if config.get("ndk_dir"):
-        global NDK_BUILD_CMD
-        NDK_BUILD_CMD = os.path.join(config["ndk_dir"], "ndk-build")
-
-    try:
-        clean_tmp_directory()
-        os.makedirs(".tmp", exist_ok=True)
-
-        # 1. Process DEX file and generate C++ code
-        project_dir = process_dex_file(
-            args.input,
-            args.filter,
-            args.obfuscate,
-            args.dynamic_register,
-            args.output
-        )
-
-        if not project_dir:
-            logger.error("Processing failed")
-            sys.exit(1)
-            
-         if not run_ndk_build(project_dir, args.ndk_path):
-            raise Exception("NDK build failed")
-
-        # 2. Create modified DEX with native stubs
-        output_dex_path = os.path.join(project_dir, "modified.dex")
-        if not modify_dex_with_native_stubs(args.input, get_compiled_methods(project_dir), output_dex_path):
-            logger.error("Failed to create modified DEX")
-            sys.exit(1)
-
-        logger.info(f"Processing complete. Output directory: {project_dir}")
-        logger.info(f"Modified DEX: {output_dex_path}")
-        logger.info(f"Shared libraries: {os.path.join(project_dir, 'libs')}")
-
-    except Exception as e:
-        logger.error(f"Error: {str(e)}")
-        sys.exit(1)
-    finally:
-        if not args.output:  # Only clean temp dir if we created it
-            clean_tmp_directory()
-
 def get_compiled_methods(project_dir):
     methods = []
     with open(os.path.join(project_dir, "jni", "nc", "compiled_methods.txt")) as f:
@@ -508,6 +450,98 @@ def get_compiled_methods(project_dir):
             else:
                 logger.warning(f"Skipping invalid method format: {line}")
     return methods
+
+def main():
+    parser = argparse.ArgumentParser(description="DEX to C++ Converter")
+    parser.add_argument("-i", "--input", required=True, help="Input DEX file path")
+    parser.add_argument("-f", "--filter", default="filter.txt", help="Method filter configuration file")
+    parser.add_argument("-o", "--output", required=True, help="Output directory")
+    parser.add_argument("-p", "--obfuscate", action="store_true", help="Obfuscate string constants")
+    parser.add_argument("-d", "--dynamic-register", action="store_true", help="Use dynamic method registration")
+    parser.add_argument("--ndk-path", help="Path to Android NDK root directory")
+    parser.add_argument("--skip-synthetic", action="store_true", help="Skip synthetic methods")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
+
+    args = parser.parse_args()
+
+    # Configure logging
+    global SKIP_SYNTHETIC_METHODS
+    SKIP_SYNTHETIC_METHODS = args.skip_synthetic
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        handler.setLevel(logging.DEBUG)
+
+    try:
+        # Clean and prepare directories
+        clean_tmp_directory()
+        os.makedirs(".tmp", exist_ok=True)
+        os.makedirs(args.output, exist_ok=True)
+
+        # Verify input files exist
+        if not os.path.exists(args.input):
+            raise Exception(f"Input DEX file not found: {args.input}")
+        if not os.path.exists(args.filter):
+            logger.warning(f"Filter file not found, using all methods: {args.filter}")
+
+        # Process DEX file
+        logger.info(f"Processing DEX file: {args.input}")
+        project_dir = prepare_project_template(args.output)
+        
+        # Compile methods
+        compiled_methods, method_prototypes, errors = compile_dex(
+            args.input, 
+            args.filter, 
+            args.obfuscate, 
+            args.dynamic_register
+        )
+        
+        if errors:
+            logger.warning(f"Encountered {len(errors)} compilation errors")
+            for error in errors[:5]:  # Show first 5 errors
+                logger.warning(error)
+
+        if not compiled_methods:
+            raise Exception("No methods compiled - check your filter configuration")
+
+        # Write output files
+        write_compiled_methods(project_dir, compiled_methods)
+        
+        if args.dynamic_register:
+            write_dynamic_register(project_dir, compiled_methods, method_prototypes)
+
+        # Run NDK build
+        logger.info("Starting NDK build...")
+        if not run_ndk_build(project_dir, args.ndk_path):
+            raise Exception("NDK build failed")
+
+        # Create modified DEX
+        output_dex = os.path.join(project_dir, "classes_modified.dex")
+        if not modify_dex_with_native_stubs(args.input, compiled_methods.keys(), output_dex):
+            raise Exception("Failed to create modified DEX")
+
+        # Verify critical outputs
+        required_outputs = {
+            "Modified DEX": output_dex,
+            "Native Libraries": os.path.join(project_dir, "libs"),
+            "Generated C++ Code": os.path.join(project_dir, "jni/nc")
+        }
+        
+        for desc, path in required_outputs.items():
+            if not os.path.exists(path):
+                raise Exception(f"Missing required output: {desc} at {path}")
+            logger.info(f"{desc} generated at: {path}")
+
+        logger.info("Conversion completed successfully")
+        return 0
+
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}")
+        if args.verbose:
+            logger.error(traceback.format_exc())
+        return 1
+    finally:
+        if not args.verbose:  # Only clean temp dir in non-verbose mode
+            clean_tmp_directory()
 
 if __name__ == "__main__":
     main()
