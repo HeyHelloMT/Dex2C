@@ -236,6 +236,7 @@ def write_dynamic_register(project_dir, compiled_methods, method_prototypes):
         export_block.append(
             export_block_template % (
                 class_path, class_path, index, export_methods, index, len(methods)
+            )
         )
     
     export_block.append("return nullptr;\n")
@@ -368,6 +369,54 @@ def process_dex_file(
 
     return project_dir
 
+def modify_dex_with_native_stubs(dexfile, compiled_methods, output_dex):
+    """
+    Modify the DEX file to replace compiled methods with native stubs
+    """
+    try:
+        # Load the original DEX
+        with open(dexfile, 'rb') as f:
+            dex_data = f.read()
+        
+        # Parse DEX
+        dv = dvm.DalvikVMFormat(dex_data)
+        
+        # For each method that was compiled to native code
+        for method_triple in compiled_methods.keys():
+            class_name, method_name, proto = method_triple
+            
+            # Find the class
+            class_def = None
+            for c in dv.get_classes():
+                if c.get_name() == class_name:
+                    class_def = c
+                    break
+            
+            if class_def:
+                # Find the method
+                for method in class_def.get_methods():
+                    m_name = method.get_name()
+                    m_proto = method.get_descriptor()
+                    
+                    if m_name == method_name and m_proto == proto:
+                        # Make the method native
+                        access_flags = method.get_access_flags()
+                        access_flags |= 0x100  # ACC_NATIVE flag
+                        method.set_access_flags(access_flags)
+                        
+                        # Clear the method code (since it's now native)
+                        method.set_code_off(0)
+        
+        # Save the modified DEX
+        with open(output_dex, 'wb') as f:
+            f.write(dv.save())
+            
+        return True
+        
+    except Exception as e:
+        print(f"Error modifying DEX: {str(e)}")
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="DEX to C++ Converter")
     parser.add_argument("-i", "--input", required=True, help="Input DEX file path")
@@ -392,6 +441,7 @@ def main():
         clean_tmp_directory()
         os.makedirs(".tmp", exist_ok=True)
 
+        # 1. Process DEX file and generate C++ code
         project_dir = process_dex_file(
             args.input,
             args.filter,
@@ -400,11 +450,19 @@ def main():
             args.output
         )
 
-        if project_dir:
-            logger.info(f"Processing complete. Output directory: {project_dir}")
-            logger.info(f"Shared libraries can be found in: {os.path.join(project_dir, 'libs')}")
-        else:
+        if not project_dir:
             logger.error("Processing failed")
+            sys.exit(1)
+
+        # 2. Create modified DEX with native stubs
+        output_dex_path = os.path.join(project_dir, "modified.dex")
+        if not modify_dex_with_native_stubs(args.input, get_compiled_methods(project_dir), output_dex_path):
+            logger.error("Failed to create modified DEX")
+            sys.exit(1)
+
+        logger.info(f"Processing complete. Output directory: {project_dir}")
+        logger.info(f"Modified DEX: {output_dex_path}")
+        logger.info(f"Shared libraries: {os.path.join(project_dir, 'libs')}")
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")
@@ -412,6 +470,17 @@ def main():
     finally:
         if not args.output:  # Only clean temp dir if we created it
             clean_tmp_directory()
+
+# Helper function to get compiled methods list
+def get_compiled_methods(project_dir):
+    methods = []
+    with open(os.path.join(project_dir, "jni", "nc", "compiled_methods.txt")) as f:
+        for line in f:
+            # Convert from "Lclass;->method(Largs)ReturnType" to triple
+            class_part, rest = line.split("->")
+            method_part, proto_part = rest.split("(")
+            methods.append((class_part, method_part, "(" + proto_part))
+    return methods
 
 if __name__ == "__main__":
     main()
