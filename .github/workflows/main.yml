@@ -3,7 +3,7 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v4
     
@@ -15,24 +15,34 @@ jobs:
     - name: Install dependencies
       run: |
         pip install androguard
-        sudo apt-get install -y dx  # For DEX manipulation tools
+        sudo apt-get install -y android-sdk dx
 
     - name: Set up Android NDK
-      uses: android-actions/setup-android-ndk@v2
-      with:
-        ndk-version: '25b'  # Latest stable version
-
-    - name: Run conversion (skip NDK build)
       run: |
-        # Temporarily disable NDK build
-        sed -i 's/if not run_ndk_build(project_dir):/if False:/' dcc.py
-        python dcc.py -i classes.dex -f filter.txt -o out/
-        
-    - name: Verify output (DEX only)
+        mkdir -p ~/android-ndk
+        curl -L https://dl.google.com/android/repository/android-ndk-r25b-linux.zip -o ndk.zip
+        unzip -q ndk.zip -d ~/android-ndk
+        echo "NDK_DIR=~/android-ndk/android-ndk-r25b" >> $GITHUB_ENV
+        echo "$HOME/android-ndk/android-ndk-r25b" >> $GITHUB_PATH
+
+    - name: Create dcc.cfg
+      run: |
+        cat <<EOF > dcc.cfg
+        {
+          "ndk_dir": "$HOME/android-ndk/android-ndk-r25b"
+        }
+        EOF
+
+    - name: Run conversion
+      run: |
+        python dcc.py -i classes.dex -f filter.txt -o out/ --dynamic-register
+
+    - name: Verify output
       run: |
         [ -f out/modified.dex ] || exit 1
         [ -f out/jni/nc/*.cpp ] || exit 1
-        echo "✓ DEX conversion successful"
+        [ -f out/libs/*/libnc.so ] || exit 1
+        echo "✓ Conversion successful"
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
