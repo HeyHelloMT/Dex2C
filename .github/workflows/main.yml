@@ -1,0 +1,60 @@
+name: Test DEX2C Conversion
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        pip install androguard
+        sudo apt-get install -y dexdump
+
+    - name: Set up NDK
+      uses: android-actions/setup-android-ndk@v2
+      with:
+        ndk-version: '25b'
+
+    - name: Run conversion
+      run: |
+        mkdir -p samples
+        # Generate a test DEX if none provided
+        if [ ! -f samples/test.dex ]; then
+          echo "Creating sample DEX..."
+          cat <<EOF > samples/Hello.java
+          public class Hello {
+              public static String greet() {
+                  return "Hello from dex2c!";
+              }
+          }
+          EOF
+          javac samples/Hello.java
+          dx --dex --output=samples/test.dex samples/Hello.class
+        fi
+
+        # Run converter with test DEX
+        python dcc.py -i samples/test.dex -o output/ --dynamic-register
+
+    - name: Verify output
+      run: |
+        # Check native libs were built
+        [ -f output/libs/armeabi-v7a/libnc.so ] || exit 1
+        
+        # Check DEX was modified
+        dexdump -f output/modified.dex | grep -q "native" || exit 1
+        echo "✓ Conversion successful"
+
+    - name: Upload artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dex2c-output
+        path: output/
