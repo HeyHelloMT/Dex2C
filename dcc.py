@@ -290,21 +290,35 @@ def compile_dex(dexfile, filtercfg, obfus, dynamic_register):
         logger.error(f"Error processing DEX file: {str(e)}")
         raise
 
-def run_ndk_build(project_dir):
+def run_ndk_build(project_dir, ndk_path=None):
+    """Run NDK build with optional custom NDK path"""
     jni_dir = os.path.join(project_dir, "jni")
     if not os.path.exists(jni_dir):
         raise Exception(f"JNI directory not found at {jni_dir}")
 
-    logger.info("Starting NDK build...")
+    # Determine NDK build command path
+    ndk_build_cmd = "ndk-build"  # Default to system PATH
+    if ndk_path:
+        ndk_build_cmd = os.path.join(ndk_path, "ndk-build")
+        if not os.path.exists(ndk_build_cmd):
+            raise Exception(f"ndk-build not found at {ndk_build_cmd}")
+
+    logger.info(f"Starting NDK build using: {ndk_build_cmd}")
     try:
         result = subprocess.run(
-            [NDK_BUILD_CMD, "-C", project_dir],
+            [ndk_build_cmd, "-C", project_dir],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
         )
         logger.info("NDK build output:\n" + result.stdout)
+        
+        # Verify .so files were created
+        lib_dir = os.path.join(project_dir, "libs")
+        if not os.path.exists(lib_dir) or not os.listdir(lib_dir):
+            raise Exception("No .so files generated in libs/ directory")
+            
         return True
     except subprocess.CalledProcessError as e:
         logger.error(f"NDK build failed:\n{e.stdout}")
@@ -424,6 +438,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output directory for compiled code")
     parser.add_argument("-p", "--obfuscate", action="store_true", help="Obfuscate string constants")
     parser.add_argument("-d", "--dynamic-register", action="store_true", help="Use dynamic method registration")
+    parser.add_argument("--ndk-path", help="Custom path to Android NDK")
     parser.add_argument("--skip-synthetic", action="store_true", help="Skip synthetic methods")
 
     args = parser.parse_args()
@@ -453,6 +468,9 @@ def main():
         if not project_dir:
             logger.error("Processing failed")
             sys.exit(1)
+            
+         if not run_ndk_build(project_dir, args.ndk_path):
+            raise Exception("NDK build failed")
 
         # 2. Create modified DEX with native stubs
         output_dex_path = os.path.join(project_dir, "modified.dex")
